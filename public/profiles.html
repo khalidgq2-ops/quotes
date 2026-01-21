@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profiles - Quotes Site</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <h1 class="nav-title">Quotes Site</h1>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Quotes</a>
+                <a href="/random" class="nav-link">Random</a>
+                <a href="/leaderboard" class="nav-link">Leaderboard</a>
+                <a href="/profiles" class="nav-link active">Profiles</a>
+                <span id="adminLink"></span>
+                <span class="nav-user" id="userDisplay"></span>
+                <button class="btn btn-small" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h2>User Profiles</h2>
+        <div id="profilesList" class="profiles-list"></div>
+    </div>
+
+    <script src="auth.js"></script>
+    <script>
+        async function loadProfiles() {
+            try {
+                const usersResponse = await fetch('/api/users');
+                const users = await usersResponse.json();
+                
+                const profilesDiv = document.getElementById('profilesList');
+                
+                if (users.length === 0) {
+                    profilesDiv.innerHTML = '<p>No users found.</p>';
+                    return;
+                }
+                
+                let html = '<div class="profiles-grid">';
+                
+                for (const user of users) {
+                    const statsResponse = await fetch(`/api/users/${user.id}/stats`);
+                    const stats = await statsResponse.json();
+                    
+                    html += `
+                        <div class="profile-card">
+                            <h3>${escapeHtml(stats.display_name)}</h3>
+                            <div class="profile-stats">
+                                <div class="stat-item">
+                                    <span class="stat-label">Total Quotes:</span>
+                                    <span class="stat-value">${stats.total_quotes || 0}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Quotes Added:</span>
+                                    <span class="stat-value">${stats.quotes_added || 0}</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Points:</span>
+                                    <span class="stat-value">${stats.total_quotes || 0}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                html += '</div>';
+                profilesDiv.innerHTML = html;
+            } catch (error) {
+                document.getElementById('profilesList').innerHTML = '<p class="error">Error loading profiles.</p>';
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        loadProfiles();
+    </script>
+</body>
+</html>

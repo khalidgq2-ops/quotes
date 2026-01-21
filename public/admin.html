@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Quotes Site</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <h1 class="nav-title">Quotes Site</h1>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Quotes</a>
+                <a href="/random" class="nav-link">Random</a>
+                <a href="/leaderboard" class="nav-link">Leaderboard</a>
+                <a href="/profiles" class="nav-link">Profiles</a>
+                <a href="/admin" class="nav-link active">Admin</a>
+                <span class="nav-user" id="userDisplay"></span>
+                <button class="btn btn-small" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h2>Admin Panel</h2>
+        <p class="subtitle">Create New Accounts</p>
+
+        <div class="admin-card">
+            <h3>Create New User</h3>
+            <form id="createUserForm">
+                <div class="form-group">
+                    <label for="newUsername">Username:</label>
+                    <input type="text" id="newUsername" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="newPassword">Password:</label>
+                    <input type="password" id="newPassword" name="password" required>
+                </div>
+                <div class="form-group">
+                    <label for="newDisplayName">Display Name:</label>
+                    <input type="text" id="newDisplayName" name="displayName" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Create User</button>
+            </form>
+            <div id="createUserMessage" class="message"></div>
+        </div>
+
+        <div class="admin-card">
+            <h3>Existing Users</h3>
+            <div id="usersList"></div>
+        </div>
+    </div>
+
+    <script src="auth.js"></script>
+    <script>
+        async function loadUsers() {
+            try {
+                const response = await fetch('/api/users');
+                const users = await response.json();
+                
+                const usersDiv = document.getElementById('usersList');
+                
+                if (users.length === 0) {
+                    usersDiv.innerHTML = '<p>No users found.</p>';
+                    return;
+                }
+                
+                let html = '<div class="users-list">';
+                users.forEach(user => {
+                    html += `
+                        <div class="user-item">
+                            <strong>${escapeHtml(user.display_name)}</strong>
+                            <span class="username">(@${escapeHtml(user.username)})</span>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                usersDiv.innerHTML = html;
+            } catch (error) {
+                document.getElementById('usersList').innerHTML = '<p class="error">Error loading users.</p>';
+            }
+        }
+
+        document.getElementById('createUserForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const messageDiv = document.getElementById('createUserMessage');
+            messageDiv.textContent = '';
+            
+            const username = document.getElementById('newUsername').value;
+            const password = document.getElementById('newPassword').value;
+            const displayName = document.getElementById('newDisplayName').value;
+            
+            try {
+                const response = await fetch('/api/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, displayName })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    messageDiv.textContent = 'User created successfully!';
+                    messageDiv.className = 'message success';
+                    document.getElementById('createUserForm').reset();
+                    loadUsers();
+                } else {
+                    messageDiv.textContent = data.error || 'Error creating user';
+                    messageDiv.className = 'message error';
+                }
+            } catch (error) {
+                messageDiv.textContent = 'Network error. Please try again.';
+                messageDiv.className = 'message error';
+            }
+        });
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        loadUsers();
+    </script>
+</body>
+</html>

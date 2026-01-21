@@ -1,0 +1,4 @@
+node_modules/
+quotes.db
+.env
+*.log

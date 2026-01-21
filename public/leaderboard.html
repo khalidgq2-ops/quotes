@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard - Quotes Site</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <h1 class="nav-title">Quotes Site</h1>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Quotes</a>
+                <a href="/random" class="nav-link">Random</a>
+                <a href="/leaderboard" class="nav-link active">Leaderboard</a>
+                <a href="/profiles" class="nav-link">Profiles</a>
+                <span id="adminLink"></span>
+                <span class="nav-user" id="userDisplay"></span>
+                <button class="btn btn-small" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <h2>Leaderboard</h2>
+        <p class="subtitle">Points based on number of quotes</p>
+        <div id="leaderboardList" class="leaderboard-list"></div>
+    </div>
+
+    <script src="auth.js"></script>
+    <script>
+        async function loadLeaderboard() {
+            try {
+                const response = await fetch('/api/leaderboard');
+                const leaderboard = await response.json();
+                
+                const listDiv = document.getElementById('leaderboardList');
+                
+                if (leaderboard.length === 0) {
+                    listDiv.innerHTML = '<p>No quotes yet. Start adding quotes!</p>';
+                    return;
+                }
+                
+                let html = '<div class="leaderboard-table">';
+                leaderboard.forEach((entry, index) => {
+                    const rank = index + 1;
+                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
+                    html += `
+                        <div class="leaderboard-entry ${rank <= 3 ? 'top-three' : ''}">
+                            <div class="rank">${medal} ${rank}</div>
+                            <div class="name">${escapeHtml(entry.display_name)}</div>
+                            <div class="points">${entry.quote_count} ${entry.quote_count === 1 ? 'quote' : 'quotes'}</div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                listDiv.innerHTML = html;
+            } catch (error) {
+                document.getElementById('leaderboardList').innerHTML = '<p class="error">Error loading leaderboard.</p>';
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        loadLeaderboard();
+    </script>
+</body>
+</html>

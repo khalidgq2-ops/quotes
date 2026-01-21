@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quotes - Quotes Site</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <h1 class="nav-title">Quotes Site</h1>
+            <div class="nav-links">
+                <a href="/" class="nav-link active">Quotes</a>
+                <a href="/random" class="nav-link">Random</a>
+                <a href="/leaderboard" class="nav-link">Leaderboard</a>
+                <a href="/profiles" class="nav-link">Profiles</a>
+                <span id="adminLink"></span>
+                <span class="nav-user" id="userDisplay"></span>
+                <button class="btn btn-small" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="page-header">
+            <h2>All Quotes</h2>
+            <button class="btn btn-primary" onclick="showAddQuoteForm()">Add Quote</button>
+        </div>
+
+        <div class="sort-controls">
+            <label for="sortSelect">Sort by:</label>
+            <select id="sortSelect" onchange="loadQuotes()">
+                <option value="date_desc">Date (Newest First)</option>
+                <option value="date_asc">Date (Oldest First)</option>
+                <option value="person">By Person</option>
+            </select>
+        </div>
+
+        <div id="quotesList" class="quotes-list"></div>
+    </div>
+
+    <!-- Add Quote Modal -->
+    <div id="addQuoteModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeAddQuoteForm()">&times;</span>
+            <h2>Add New Quote</h2>
+            <form id="addQuoteForm">
+                <div class="form-group">
+                    <label for="quoteText">Quote:</label>
+                    <textarea id="quoteText" name="quoteText" rows="4" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="personSelect">Who said this?</label>
+                    <select id="personSelect" name="personId" required>
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Add Quote</button>
+                <button type="button" class="btn btn-secondary" onclick="closeAddQuoteForm()">Cancel</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="auth.js"></script>
+    <script src="quotes.js"></script>
+</body>
+</html>
