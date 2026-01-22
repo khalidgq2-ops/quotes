@@ -1,80 +1,64 @@
-// Script to ensure admin user exists
+// Script to ensure admin user exists (PostgreSQL version)
 // Run this if admin login doesn't work: node ensure-admin.js
+// Requires DATABASE_URL environment variable
 
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
-const path = require('path');
 
-const dbPath = path.join(__dirname, 'quotes.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Error opening database:', err);
-    process.exit(1);
-  }
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : false,
 });
 
-// Get Everyone group ID
-db.get('SELECT id FROM groups WHERE name = ?', ['Everyone'], (err, group) => {
-  if (err) {
-    console.error('Error finding Everyone group:', err);
-    db.close();
-    process.exit(1);
-  }
-  
-  if (!group) {
-    console.error('Everyone group not found. Please run the server first to initialize the database.');
-    db.close();
-    process.exit(1);
-  }
-  
-  const everyoneGroupId = group.id;
-  
-  // Check if admin exists
-  db.get('SELECT id FROM users WHERE username = ?', ['admin'], (err, admin) => {
-    if (err) {
-      console.error('Error checking admin:', err);
-      db.close();
-      process.exit(1);
+async function ensureAdmin() {
+  try {
+    // Get or create Everyone group
+    let groupResult = await pool.query('SELECT id FROM groups WHERE name = $1', ['Everyone']);
+    let defaultGroupId;
+    
+    if (groupResult.rows.length === 0) {
+      const insertResult = await pool.query('INSERT INTO groups (name) VALUES ($1) RETURNING id', ['Everyone']);
+      defaultGroupId = insertResult.rows[0].id;
+      console.log('Created Everyone group');
+    } else {
+      defaultGroupId = groupResult.rows[0].id;
     }
     
-    if (admin) {
+    // Check if admin exists
+    const adminResult = await pool.query('SELECT id FROM users WHERE username = $1', ['admin']);
+    
+    if (adminResult.rows.length === 0) {
+      // Create admin
+      const hash = await bcrypt.hash('admin123', 10);
+      const userResult = await pool.query(
+        'INSERT INTO users (username, password, display_name, is_admin) VALUES ($1, $2, $3, $4) RETURNING id',
+        ['admin', hash, 'Admin', 1]
+      );
+      const adminId = userResult.rows[0].id;
+      await pool.query(
+        'INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [adminId, defaultGroupId]
+      );
+      console.log('✓ Admin user created successfully!');
+      console.log('  Username: admin');
+      console.log('  Password: admin123');
+      console.log('  IMPORTANT: Change this password after logging in!');
+    } else {
       console.log('Admin user already exists.');
       // Ensure admin is in Everyone group
-      db.run('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?,?)', [admin.id, everyoneGroupId], (err) => {
-        if (err) {
-          console.error('Error adding admin to Everyone group:', err);
-        } else {
-          console.log('Admin is in Everyone group.');
-        }
-        db.close();
-      });
-    } else {
-      // Create admin
-      const hash = bcrypt.hashSync('admin123', 10);
-      db.run(
-        'INSERT INTO users (username, password, display_name, is_admin) VALUES (?,?,?,?)',
-        ['admin', hash, 'Admin', 1],
-        function(err) {
-          if (err) {
-            console.error('Error creating admin:', err);
-            db.close();
-            process.exit(1);
-          }
-          
-          const adminId = this.lastID;
-          db.run('INSERT INTO user_groups (user_id, group_id) VALUES (?,?)', [adminId, everyoneGroupId], (err) => {
-            if (err) {
-              console.error('Error adding admin to Everyone group:', err);
-            } else {
-              console.log('✓ Admin user created successfully!');
-              console.log('  Username: admin');
-              console.log('  Password: admin123');
-              console.log('  IMPORTANT: Change this password after logging in!');
-            }
-            db.close();
-          });
-        }
+      await pool.query(
+        'INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [adminResult.rows[0].id, defaultGroupId]
       );
+      console.log('Admin is in Everyone group.');
     }
-  });
-});
+    
+    await pool.end();
+  } catch (err) {
+    console.error('Error:', err);
+    await pool.end();
+    process.exit(1);
+  }
+}
+
+ensureAdmin();

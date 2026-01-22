@@ -1,10 +1,11 @@
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
 const cron = require('node-cron');
 const rateLimit = require('express-rate-limit');
 
@@ -13,6 +14,12 @@ const PORT = process.env.PORT || 3000;
 const BACKUP_DIR = path.join(__dirname, 'backups');
 const MAX_BACKUPS = process.env.MAX_BACKUPS ? parseInt(process.env.MAX_BACKUPS, 10) : 8;
 const BACKUP_CRON = process.env.BACKUP_CRON || '0 3 * * 0,3'; // 3am Sunday & Wednesday (2x/week)
+
+// PostgreSQL connection pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : false,
+});
 
 // Ensure backup dir exists
 try {
@@ -56,163 +63,184 @@ app.use(session({
   name: 'quotes.sid',
 }));
 
-// Database
-const dbPath = path.join(__dirname, 'quotes.db');
-const db = new sqlite3.Database(dbPath, (err) => {
+// Test database connection
+pool.query('SELECT NOW()', (err, res) => {
   if (err) {
-    console.error('Error opening database:', err);
+    console.error('Error connecting to PostgreSQL:', err);
   } else {
-    console.log('Connected to SQLite database');
+    console.log('Connected to PostgreSQL database');
     initializeDatabase();
   }
 });
 
 // --- Backups ---
 function runBackup() {
-  const dest = path.join(BACKUP_DIR, `quotes-${Date.now()}.db`);
-  try {
-    fs.copyFileSync(dbPath, dest);
-    const files = fs.readdirSync(BACKUP_DIR)
-      .map(f => ({ name: f, mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtime.getTime() }))
-      .sort((a, b) => b.mtime - a.mtime);
-    while (files.length > MAX_BACKUPS) {
-      const victim = files.pop();
-      fs.unlinkSync(path.join(BACKUP_DIR, victim.name));
-    }
-    console.log('Backup completed:', path.basename(dest));
-  } catch (e) {
-    console.error('Backup failed:', e.message);
+  const dest = path.join(BACKUP_DIR, `quotes-${Date.now()}.sql`);
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) {
+    console.error('DATABASE_URL not set, cannot backup');
+    return;
   }
+  
+  // Use pg_dump to create SQL backup
+  // Note: pg_dump must be available in PATH (Railway should have it)
+  const cmd = `pg_dump "${dbUrl}" -F p > "${dest}" 2>&1`;
+  exec(cmd, (error, stdout, stderr) => {
+    if (error) {
+      console.error('Backup failed:', error.message);
+      if (stderr) console.error('Backup stderr:', stderr);
+      return;
+    }
+    
+    // Check if file was created
+    if (!fs.existsSync(dest)) {
+      console.error('Backup file was not created');
+      return;
+    }
+    
+    // Rotate backups
+    try {
+      const files = fs.readdirSync(BACKUP_DIR)
+        .filter(f => f.endsWith('.sql'))
+        .map(f => ({ name: f, mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtime.getTime() }))
+        .sort((a, b) => b.mtime - a.mtime);
+      while (files.length > MAX_BACKUPS) {
+        const victim = files.pop();
+        fs.unlinkSync(path.join(BACKUP_DIR, victim.name));
+      }
+      console.log('Backup completed:', path.basename(dest));
+    } catch (e) {
+      console.error('Backup rotation failed:', e.message);
+    }
+  });
 }
 
 cron.schedule(BACKUP_CRON, runBackup);
 console.log('Backups scheduled:', BACKUP_CRON, '| keep last', MAX_BACKUPS);
 
 // --- Schema & init ---
-function initializeDatabase() {
-  db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
+async function initializeDatabase() {
+  try {
+    // Create tables
+    await pool.query(`CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username VARCHAR(64) UNIQUE NOT NULL,
       password TEXT NOT NULL,
-      display_name TEXT NOT NULL,
+      display_name VARCHAR(128) NOT NULL,
       is_admin INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`);
-    db.run(`CREATE TABLE IF NOT EXISTS groups (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    
+    await pool.query(`CREATE TABLE IF NOT EXISTS groups (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(128) UNIQUE NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`);
-    db.run(`CREATE TABLE IF NOT EXISTS user_groups (
+    
+    await pool.query(`CREATE TABLE IF NOT EXISTS user_groups (
       user_id INTEGER NOT NULL,
       group_id INTEGER NOT NULL,
       PRIMARY KEY (user_id, group_id),
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (group_id) REFERENCES groups(id)
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
     )`);
-    db.run(`CREATE TABLE IF NOT EXISTS quotes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      quote_text TEXT NOT NULL,
-      person_id INTEGER NOT NULL,
-      added_by INTEGER NOT NULL,
-      group_id INTEGER NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (person_id) REFERENCES users(id),
-      FOREIGN KEY (added_by) REFERENCES users(id),
-      FOREIGN KEY (group_id) REFERENCES groups(id)
-    )`, () => {
-      db.all('PRAGMA table_info(quotes)', (err, rows) => {
-        if (err) return void ensureDefaultGroupAndAdmin();
-        const cols = (rows || []).map(r => r.name);
-        if (cols.includes('group_id')) {
-          return void ensureDefaultGroupAndAdmin();
-        }
-        db.run('ALTER TABLE quotes ADD COLUMN group_id INTEGER REFERENCES groups(id)', (e) => {
-          if (e) console.warn('Migration group_id:', e.message);
-          ensureDefaultGroupAndAdmin();
-        });
-      });
-    });
-  });
+    
+    // Check if quotes table has group_id column
+    const tableCheck = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'quotes' AND column_name = 'group_id'
+    `);
+    
+    if (tableCheck.rows.length === 0) {
+      // Create quotes table without group_id first, then add it
+      await pool.query(`CREATE TABLE IF NOT EXISTS quotes (
+        id SERIAL PRIMARY KEY,
+        quote_text TEXT NOT NULL,
+        person_id INTEGER NOT NULL,
+        added_by INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (person_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE CASCADE
+      )`);
+      
+      // Add group_id column
+      await pool.query(`
+        ALTER TABLE quotes 
+        ADD COLUMN group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE
+      `).catch(e => console.warn('Migration group_id:', e.message));
+    } else {
+      // Table exists with group_id, just ensure it exists
+      await pool.query(`CREATE TABLE IF NOT EXISTS quotes (
+        id SERIAL PRIMARY KEY,
+        quote_text TEXT NOT NULL,
+        person_id INTEGER NOT NULL,
+        added_by INTEGER NOT NULL,
+        group_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (person_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+      )`);
+    }
+    
+    await ensureDefaultGroupAndAdmin();
+  } catch (err) {
+    console.error('Database initialization error:', err);
+  }
 }
 
-function ensureDefaultGroupAndAdmin() {
-  db.get('SELECT COUNT(*) as c FROM users', (err, r) => {
-    if (err || !r) return;
-    const noUsers = r.c === 0;
-    db.get('SELECT id FROM groups WHERE name = ?', ['Everyone'], (e, g) => {
-      let defaultGroupId = g && g.id;
-      const createGroup = (cb) => {
-        db.run('INSERT INTO groups (name) VALUES (?)', ['Everyone'], function(er) {
-          if (er) return cb(er);
-          defaultGroupId = this.lastID;
-          cb();
-        });
-      };
-      const ensureAdmin = () => {
-        // Check if admin exists, create if not
-        db.get('SELECT id FROM users WHERE username = ?', ['admin'], (err, admin) => {
-          if (err) {
-            console.error('Error checking admin:', err.message);
-            return;
-          }
-          if (!admin) {
-            // Admin doesn't exist, create it
-            const hash = bcrypt.hashSync('admin123', 10);
-            db.run(
-              'INSERT INTO users (username, password, display_name, is_admin) VALUES (?,?,?,?)',
-              ['admin', hash, 'Admin', 1],
-              function(er) {
-                if (er) {
-                  console.error('Create admin:', er.message);
-                  return;
-                }
-                const uid = this.lastID;
-                db.run('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?,?)', [uid, defaultGroupId], () => {
-                  console.log('Default admin created: admin / admin123');
-                });
-              }
-            );
-          } else {
-            // Admin exists, ensure they're in Everyone group
-            if (defaultGroupId) {
-              db.run('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?,?)', [admin.id, defaultGroupId], () => {});
-            }
-          }
-        });
-      };
-      const migrateQuotes = () => {
-        db.run('UPDATE quotes SET group_id = ? WHERE group_id IS NULL', [defaultGroupId], (er) => {
-          if (er) console.warn('Migrate quotes:', er.message);
-        });
-      };
-      const addAllToEveryone = () => {
-        db.all('SELECT id FROM users', (e, users) => {
-          if (e || !users) return;
-          const stmt = db.prepare('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?,?)');
-          users.forEach(u => stmt.run(u.id, defaultGroupId));
-          stmt.finalize();
-        });
-      };
-
-      if (!defaultGroupId) {
-        createGroup((er) => {
-          if (er) {
-            console.error('Create Everyone group:', er.message);
-            return;
-          }
-          ensureAdmin();
-          migrateQuotes();
-          addAllToEveryone();
-        });
-      } else {
-        ensureAdmin();
-        migrateQuotes();
-        addAllToEveryone();
-      }
-    });
-  });
+async function ensureDefaultGroupAndAdmin() {
+  try {
+    // Get or create Everyone group
+    let groupResult = await pool.query('SELECT id FROM groups WHERE name = $1', ['Everyone']);
+    let defaultGroupId;
+    
+    if (groupResult.rows.length === 0) {
+      const insertResult = await pool.query('INSERT INTO groups (name) VALUES ($1) RETURNING id', ['Everyone']);
+      defaultGroupId = insertResult.rows[0].id;
+    } else {
+      defaultGroupId = groupResult.rows[0].id;
+    }
+    
+    // Ensure admin exists
+    const adminResult = await pool.query('SELECT id FROM users WHERE username = $1', ['admin']);
+    
+    if (adminResult.rows.length === 0) {
+      // Create admin
+      const hash = bcrypt.hashSync('admin123', 10);
+      const userResult = await pool.query(
+        'INSERT INTO users (username, password, display_name, is_admin) VALUES ($1, $2, $3, $4) RETURNING id',
+        ['admin', hash, 'Admin', 1]
+      );
+      const adminId = userResult.rows[0].id;
+      await pool.query(
+        'INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [adminId, defaultGroupId]
+      );
+      console.log('Default admin created: admin / admin123');
+    } else {
+      // Admin exists, ensure in Everyone group
+      await pool.query(
+        'INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [adminResult.rows[0].id, defaultGroupId]
+      );
+    }
+    
+    // Migrate quotes without group_id
+    await pool.query('UPDATE quotes SET group_id = $1 WHERE group_id IS NULL', [defaultGroupId]).catch(() => {});
+    
+    // Add all users to Everyone group
+    const usersResult = await pool.query('SELECT id FROM users');
+    for (const user of usersResult.rows) {
+      await pool.query(
+        'INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [user.id, defaultGroupId]
+      );
+    }
+  } catch (err) {
+    console.error('Error ensuring default group and admin:', err);
+  }
 }
 
 // --- Auth helpers ---
@@ -236,11 +264,13 @@ function requireAdmin(req, res, next) {
   res.status(403).json({ error: 'Admin access required' });
 }
 
-function getUserGroupIds(userId, cb) {
-  db.all('SELECT group_id FROM user_groups WHERE user_id = ?', [userId], (err, rows) => {
-    if (err) return cb(err);
-    cb(null, (rows || []).map(r => r.group_id));
-  });
+async function getUserGroupIds(userId) {
+  try {
+    const result = await pool.query('SELECT group_id FROM user_groups WHERE user_id = $1', [userId]);
+    return result.rows.map(r => r.group_id);
+  } catch (err) {
+    throw err;
+  }
 }
 
 const SORT_WHITELIST = { date_desc: true, date_asc: true, person: true };
@@ -263,34 +293,37 @@ function sanitizeDisplayName(s) {
 
 // --- Routes ---
 
-app.post('/api/login', loginLimiter, (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res) => {
   const username = sanitizeUsername(req.body.username);
   const password = req.body.password;
   if (!username || !password) {
     return res.status(400).json({ error: 'Invalid credentials' });
   }
 
-  db.get('SELECT * FROM users WHERE username = ?', [username], (err, user) => {
-    if (err) return res.status(500).json({ error: 'Database error' });
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-
-    bcrypt.compare(password, user.password, (e, ok) => {
-      if (e || !ok) return res.status(401).json({ error: 'Invalid credentials' });
-      req.session.userId = user.id;
-      req.session.username = user.username;
-      req.session.displayName = user.display_name;
-      req.session.isAdmin = user.is_admin === 1;
-      res.json({
-        success: true,
-        user: {
-          id: user.id,
-          username: user.username,
-          displayName: user.display_name,
-          isAdmin: user.is_admin === 1,
-        },
-      });
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    if (result.rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+    
+    const user = result.rows[0];
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: 'Invalid credentials' });
+    
+    req.session.userId = user.id;
+    req.session.username = user.username;
+    req.session.displayName = user.display_name;
+    req.session.isAdmin = user.is_admin === 1;
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        isAdmin: user.is_admin === 1,
+      },
     });
-  });
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 app.post('/api/logout', (req, res) => {
@@ -298,82 +331,81 @@ app.post('/api/logout', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/me', (req, res) => {
+app.get('/api/me', async (req, res) => {
   if (!req.session || !req.session.userId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   
-  // Check if user is only in "Everyone" group (hide group UI for them)
-  db.get(
-    `SELECT COUNT(*) as group_count,
-     SUM(CASE WHEN g.name = 'Everyone' THEN 1 ELSE 0 END) as everyone_count
-     FROM user_groups ug
-     JOIN groups g ON g.id = ug.group_id
-     WHERE ug.user_id = ?`,
-    [req.session.userId],
-    (err, row) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      
-      // showGroupUI = false if user is only in "Everyone" (and not admin)
-      // Admins always see group UI
-      const showGroupUI = req.session.isAdmin || (row.group_count > 1 || row.everyone_count === 0);
-      
-      res.json({
-        id: req.session.userId,
-        username: req.session.username,
-        displayName: req.session.displayName,
-        isAdmin: req.session.isAdmin,
-        showGroupUI: showGroupUI,
-      });
-    }
-  );
+  try {
+    // Check if user is only in "Everyone" group (hide group UI for them)
+    const result = await pool.query(
+      `SELECT COUNT(*)::int as group_count,
+       SUM(CASE WHEN g.name = 'Everyone' THEN 1 ELSE 0 END)::int as everyone_count
+       FROM user_groups ug
+       JOIN groups g ON g.id = ug.group_id
+       WHERE ug.user_id = $1`,
+      [req.session.userId]
+    );
+    
+    const row = result.rows[0];
+    // showGroupUI = false if user is only in "Everyone" (and not admin)
+    // Admins always see group UI
+    const showGroupUI = req.session.isAdmin || (row.group_count > 1 || row.everyone_count === 0);
+    
+    res.json({
+      id: req.session.userId,
+      username: req.session.username,
+      displayName: req.session.displayName,
+      isAdmin: req.session.isAdmin,
+      showGroupUI: showGroupUI,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 app.use('/api', apiLimiter);
 
-app.get('/api/groups', requireAuth, (req, res) => {
-  db.all(
-    `SELECT g.id, g.name FROM groups g
-     INNER JOIN user_groups ug ON ug.group_id = g.id
-     WHERE ug.user_id = ?
-     ORDER BY g.name`,
-    [req.session.userId],
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: 'Database error' });
-      res.json(rows || []);
-    }
-  );
-});
-
-app.get('/api/users', requireAuth, (req, res) => {
-  const uid = req.session.userId;
-  const isAdmin = req.session.isAdmin;
-
-  if (isAdmin) {
-    db.all('SELECT id, username, display_name FROM users ORDER BY display_name', (err, users) => {
-      if (err) return res.status(500).json({ error: 'Database error' });
-      return res.json(users || []);
-    });
-    return;
+app.get('/api/groups', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT g.id, g.name FROM groups g
+       INNER JOIN user_groups ug ON ug.group_id = g.id
+       WHERE ug.user_id = $1
+       ORDER BY g.name`,
+      [req.session.userId]
+    );
+    res.json(result.rows || []);
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
   }
-
-  db.all(
-    `SELECT DISTINCT u.id, u.username, u.display_name
-     FROM users u
-     INNER JOIN user_groups ug ON ug.user_id = u.id
-     WHERE ug.group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?)
-     ORDER BY u.display_name`,
-    [uid],
-    (err, users) => {
-      if (err) return res.status(500).json({ error: 'Database error' });
-      res.json(users || []);
-    }
-  );
 });
 
-app.post('/api/users', requireAdmin, (req, res) => {
+app.get('/api/users', requireAuth, async (req, res) => {
+  try {
+    const uid = req.session.userId;
+    const isAdmin = req.session.isAdmin;
+
+    if (isAdmin) {
+      const result = await pool.query('SELECT id, username, display_name FROM users ORDER BY display_name');
+      return res.json(result.rows || []);
+    }
+
+    const result = await pool.query(
+      `SELECT DISTINCT u.id, u.username, u.display_name
+       FROM users u
+       INNER JOIN user_groups ug ON ug.user_id = u.id
+       WHERE ug.group_id IN (SELECT group_id FROM user_groups WHERE user_id = $1)
+       ORDER BY u.display_name`,
+      [uid]
+    );
+    res.json(result.rows || []);
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.post('/api/users', requireAdmin, async (req, res) => {
   const username = sanitizeUsername(req.body.username);
   const password = req.body.password;
   const displayName = sanitizeDisplayName(req.body.displayName);
@@ -384,33 +416,30 @@ app.post('/api/users', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
 
-  bcrypt.hash(password, 10, (err, hash) => {
-    if (err) return res.status(500).json({ error: 'Error hashing password' });
-    db.run(
-      'INSERT INTO users (username, password, display_name) VALUES (?,?,?)',
-      [username, hash, displayName],
-      function(er) {
-        if (er) {
-          if (er.message.includes('UNIQUE')) return res.status(400).json({ error: 'Username already exists' });
-          return res.status(500).json({ error: 'Database error' });
-        }
-        res.json({ success: true, userId: this.lastID });
-      }
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      'INSERT INTO users (username, password, display_name) VALUES ($1, $2, $3) RETURNING id',
+      [username, hash, displayName]
     );
-  });
+    res.json({ success: true, userId: result.rows[0].id });
+  } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ error: 'Username already exists' });
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.get('/api/quotes', requireAuth, (req, res) => {
-  const sort = SORT_WHITELIST[req.query.sort] ? req.query.sort : 'date_desc';
-  let orderBy = 'q.created_at DESC';
-  if (sort === 'date_asc') orderBy = 'q.created_at ASC';
-  else if (sort === 'person') orderBy = 'p.display_name ASC, q.created_at DESC';
+app.get('/api/quotes', requireAuth, async (req, res) => {
+  try {
+    const sort = SORT_WHITELIST[req.query.sort] ? req.query.sort : 'date_desc';
+    let orderBy = 'q.created_at DESC';
+    if (sort === 'date_asc') orderBy = 'q.created_at ASC';
+    else if (sort === 'person') orderBy = 'p.display_name ASC, q.created_at DESC';
 
-  getUserGroupIds(req.session.userId, (err, gids) => {
-    if (err) return res.status(500).json({ error: 'Database error' });
+    const gids = await getUserGroupIds(req.session.userId);
     if (!gids.length) return res.json([]);
 
-    const placeholders = gids.map(() => '?').join(',');
+    const placeholders = gids.map((_, i) => `$${i + 1}`).join(',');
     const sql = `SELECT q.id, q.quote_text, q.created_at, q.group_id,
           p.id as person_id, p.display_name as person_name,
           a.id as added_by_id, a.display_name as added_by_name,
@@ -421,20 +450,20 @@ app.get('/api/quotes', requireAuth, (req, res) => {
           JOIN groups g ON q.group_id = g.id
           WHERE q.group_id IN (${placeholders})
           ORDER BY ${orderBy}`;
-    db.all(sql, gids, (e, rows) => {
-      if (e) return res.status(500).json({ error: 'Database error' });
-      res.json(rows || []);
-    });
-  });
+    const result = await pool.query(sql, gids);
+    res.json(result.rows || []);
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.get('/api/quotes/random', requireAuth, (req, res) => {
-  getUserGroupIds(req.session.userId, (err, gids) => {
-    if (err) return res.status(500).json({ error: 'Database error' });
+app.get('/api/quotes/random', requireAuth, async (req, res) => {
+  try {
+    const gids = await getUserGroupIds(req.session.userId);
     if (!gids.length) return res.status(404).json({ error: 'No quotes found' });
 
-    const placeholders = gids.map(() => '?').join(',');
-    db.get(
+    const placeholders = gids.map((_, i) => `$${i + 1}`).join(',');
+    const result = await pool.query(
       `SELECT q.id, q.quote_text, q.created_at, q.group_id,
         p.id as person_id, p.display_name as person_name,
         a.id as added_by_id, a.display_name as added_by_name,
@@ -445,17 +474,16 @@ app.get('/api/quotes/random', requireAuth, (req, res) => {
         JOIN groups g ON q.group_id = g.id
         WHERE q.group_id IN (${placeholders})
         ORDER BY RANDOM() LIMIT 1`,
-      gids,
-      (e, quote) => {
-        if (e) return res.status(500).json({ error: 'Database error' });
-        if (!quote) return res.status(404).json({ error: 'No quotes found' });
-        res.json(quote);
-      }
+      gids
     );
-  });
+    if (result.rows.length === 0) return res.status(404).json({ error: 'No quotes found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.post('/api/quotes', requireAuth, (req, res) => {
+app.post('/api/quotes', requireAuth, async (req, res) => {
   const quoteText = sanitizeQuote(req.body.quoteText);
   const personId = parseInt(req.body.personId, 10);
   const groupId = parseInt(req.body.groupId, 10);
@@ -463,140 +491,147 @@ app.post('/api/quotes', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Missing or invalid required fields' });
   }
 
-  getUserGroupIds(req.session.userId, (err, gids) => {
-    if (err) return res.status(500).json({ error: 'Database error' });
+  try {
+    const gids = await getUserGroupIds(req.session.userId);
     if (!gids.includes(groupId)) return res.status(403).json({ error: 'You do not have access to this group' });
 
-    db.run(
-      'INSERT INTO quotes (quote_text, person_id, added_by, group_id) VALUES (?,?,?,?)',
-      [quoteText, personId, req.session.userId, groupId],
-      function(er) {
-        if (er) return res.status(500).json({ error: 'Database error' });
-        res.json({ success: true, quoteId: this.lastID });
-      }
+    const result = await pool.query(
+      'INSERT INTO quotes (quote_text, person_id, added_by, group_id) VALUES ($1, $2, $3, $4) RETURNING id',
+      [quoteText, personId, req.session.userId, groupId]
     );
-  });
+    res.json({ success: true, quoteId: result.rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.get('/api/leaderboard', requireAuth, (req, res) => {
-  getUserGroupIds(req.session.userId, (err, gids) => {
-    if (err) return res.status(500).json({ error: 'Database error' });
+app.get('/api/leaderboard', requireAuth, async (req, res) => {
+  try {
+    const gids = await getUserGroupIds(req.session.userId);
     if (!gids.length) return res.json([]);
 
-    const placeholders = gids.map(() => '?').join(',');
+    const placeholders = gids.map((_, i) => `$${i + 1}`).join(',');
     const sql = `SELECT u.id, u.display_name,
-          COUNT(q.id) as quote_count
+          COUNT(q.id)::int as quote_count
           FROM users u
           LEFT JOIN quotes q ON u.id = q.person_id AND q.group_id IN (${placeholders})
           GROUP BY u.id, u.display_name
-          HAVING quote_count > 0
+          HAVING COUNT(q.id) > 0
           ORDER BY quote_count DESC, u.display_name ASC`;
-    db.all(sql, gids, (e, rows) => {
-      if (e) return res.status(500).json({ error: 'Database error' });
-      res.json(rows || []);
-    });
-  });
+    const result = await pool.query(sql, gids);
+    res.json(result.rows || []);
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.get('/api/users/:id/stats', requireAuth, (req, res) => {
+app.get('/api/users/:id/stats', requireAuth, async (req, res) => {
   const targetId = parseInt(req.params.id, 10);
   if (!Number.isInteger(targetId)) return res.status(400).json({ error: 'Invalid user' });
   const isAdmin = !!req.session.isAdmin;
 
-  if (isAdmin) {
-    db.get(
-      `SELECT u.id, u.display_name, u.username,
-        (SELECT COUNT(*) FROM quotes q WHERE q.person_id = u.id) as total_quotes,
-        (SELECT COUNT(*) FROM quotes q WHERE q.added_by = u.id) as quotes_added
-        FROM users u WHERE u.id = ?`,
-      [targetId],
-      (e, stats) => {
-        if (e) return res.status(500).json({ error: 'Database error' });
-        if (!stats) return res.status(404).json({ error: 'User not found' });
-        res.json(stats);
-      }
-    );
-    return;
-  }
+  try {
+    if (isAdmin) {
+      const result = await pool.query(
+        `SELECT u.id, u.display_name, u.username,
+          (SELECT COUNT(*)::int FROM quotes q WHERE q.person_id = u.id) as total_quotes,
+          (SELECT COUNT(*)::int FROM quotes q WHERE q.added_by = u.id) as quotes_added
+          FROM users u WHERE u.id = $1`,
+        [targetId]
+      );
+      if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+      return res.json(result.rows[0]);
+    }
 
-  getUserGroupIds(req.session.userId, (err, gids) => {
-    if (err) return res.status(500).json({ error: 'Database error' });
+    const gids = await getUserGroupIds(req.session.userId);
     if (!gids.length) return res.status(404).json({ error: 'User not found' });
 
-    const placeholders = gids.map(() => '?').join(',');
-    db.get(
+    const placeholders1 = gids.map((_, i) => `$${i + 1}`).join(',');
+    const placeholders2 = gids.map((_, i) => `$${gids.length + i + 1}`).join(',');
+    const placeholders3 = gids.map((_, i) => `$${gids.length * 2 + i + 1}`).join(',');
+    const targetParam = `$${gids.length * 3 + 1}`;
+    const result = await pool.query(
       `SELECT u.id, u.display_name, u.username,
-        (SELECT COUNT(*) FROM quotes q WHERE q.person_id = u.id AND q.group_id IN (${placeholders})) as total_quotes,
-        (SELECT COUNT(*) FROM quotes q WHERE q.added_by = u.id AND q.group_id IN (${placeholders})) as quotes_added
+        (SELECT COUNT(*)::int FROM quotes q WHERE q.person_id = u.id AND q.group_id IN (${placeholders1})) as total_quotes,
+        (SELECT COUNT(*)::int FROM quotes q WHERE q.added_by = u.id AND q.group_id IN (${placeholders2})) as quotes_added
         FROM users u
-        INNER JOIN user_groups ug ON ug.user_id = u.id AND ug.group_id IN (${placeholders})
-        WHERE u.id = ?`,
-      [...gids, ...gids, ...gids, targetId],
-      (e, stats) => {
-        if (e) return res.status(500).json({ error: 'Database error' });
-        if (!stats) return res.status(404).json({ error: 'User not found' });
-        res.json(stats);
-      }
+        INNER JOIN user_groups ug ON ug.user_id = u.id AND ug.group_id IN (${placeholders3})
+        WHERE u.id = ${targetParam}`,
+      [...gids, ...gids, ...gids, targetId]
     );
-  });
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Admin: groups
-app.get('/api/admin/groups', requireAdmin, (req, res) => {
-  db.all('SELECT id, name FROM groups ORDER BY name', (err, rows) => {
-    if (err) return res.status(500).json({ error: 'Database error' });
-    res.json(rows || []);
-  });
+app.get('/api/admin/groups', requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name FROM groups ORDER BY name');
+    res.json(result.rows || []);
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.post('/api/admin/groups', requireAdmin, (req, res) => {
+app.post('/api/admin/groups', requireAdmin, async (req, res) => {
   const name = sanitizeDisplayName(req.body.name);
   if (!name) return res.status(400).json({ error: 'Group name required' });
-  db.run('INSERT INTO groups (name) VALUES (?)', [name], function(er) {
-    if (er) {
-      if (er.message.includes('UNIQUE')) return res.status(400).json({ error: 'Group name already exists' });
-      return res.status(500).json({ error: 'Database error' });
-    }
-    res.json({ success: true, groupId: this.lastID });
-  });
+  try {
+    const result = await pool.query('INSERT INTO groups (name) VALUES ($1) RETURNING id', [name]);
+    res.json({ success: true, groupId: result.rows[0].id });
+  } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ error: 'Group name already exists' });
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.get('/api/admin/user-groups', requireAdmin, (req, res) => {
-  db.all(
-    `SELECT ug.user_id, ug.group_id, u.display_name, g.name as group_name
-     FROM user_groups ug
-     JOIN users u ON u.id = ug.user_id
-     JOIN groups g ON g.id = ug.group_id
-     ORDER BY u.display_name, g.name`,
-    (err, rows) => {
-      if (err) return res.status(500).json({ error: 'Database error' });
-      res.json(rows || []);
-    }
-  );
+app.get('/api/admin/user-groups', requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ug.user_id, ug.group_id, u.display_name, g.name as group_name
+       FROM user_groups ug
+       JOIN users u ON u.id = ug.user_id
+       JOIN groups g ON g.id = ug.group_id
+       ORDER BY u.display_name, g.name`
+    );
+    res.json(result.rows || []);
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.post('/api/admin/user-groups', requireAdmin, (req, res) => {
+app.post('/api/admin/user-groups', requireAdmin, async (req, res) => {
   const userId = parseInt(req.body.userId, 10);
   const groupId = parseInt(req.body.groupId, 10);
   if (!Number.isInteger(userId) || !Number.isInteger(groupId)) {
     return res.status(400).json({ error: 'Invalid userId or groupId' });
   }
-  db.run('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?,?)', [userId, groupId], function(er) {
-    if (er) return res.status(500).json({ error: 'Database error' });
+  try {
+    await pool.query(
+      'INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [userId, groupId]
+    );
     res.json({ success: true });
-  });
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
-app.delete('/api/admin/user-groups', requireAdmin, (req, res) => {
+app.delete('/api/admin/user-groups', requireAdmin, async (req, res) => {
   const userId = parseInt(req.body.userId, 10);
   const groupId = parseInt(req.body.groupId, 10);
   if (!Number.isInteger(userId) || !Number.isInteger(groupId)) {
     return res.status(400).json({ error: 'Invalid userId or groupId' });
   }
-  db.run('DELETE FROM user_groups WHERE user_id = ? AND group_id = ?', [userId, groupId], function(er) {
-    if (er) return res.status(500).json({ error: 'Database error' });
+  try {
+    await pool.query('DELETE FROM user_groups WHERE user_id = $1 AND group_id = $2', [userId, groupId]);
     res.json({ success: true });
-  });
+  } catch (err) {
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Pages

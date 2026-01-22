@@ -98,7 +98,7 @@ Your site will be live at: `https://your-app-name.up.railway.app`
 
 ## Important Notes:
 
-- **Database**: SQLite file will be created automatically on first run
+- **Database**: PostgreSQL database required. Railway provides this automatically when you add PostgreSQL service.
 - **Session Secret**: Make sure to set a strong random `SESSION_SECRET` in production
 - **HTTPS**: All these platforms provide HTTPS automatically
 - **Free Tier Limits**: 

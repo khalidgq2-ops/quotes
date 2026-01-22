@@ -31,7 +31,7 @@
 
 ### Backups
 
-- SQLite backups 2×/week under `backups/`, rotation keeps last 8 (configurable via `MAX_BACKUPS`).
+- PostgreSQL SQL dumps 2×/week under `backups/`, rotation keeps last 8 (configurable via `MAX_BACKUPS`).
 - Schedule configurable with `BACKUP_CRON` (default: `0 3 * * 0,3` — 3am Sun & Wed).
 
 ## Deployment Checklist

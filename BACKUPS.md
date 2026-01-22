@@ -10,19 +10,24 @@
 ## Where backups are stored
 
 - **Path**: `backups/` inside the app directory (same folder as `server.js`).
-- **Files**: `quotes-<timestamp>.db`, e.g. `quotes-1737542400000.db`.
-- **What**: A direct copy of the live SQLite DB (`quotes.db`) at backup time. No extra compression or encryption.
+- **Files**: `quotes-<timestamp>.sql`, e.g. `quotes-1737542400000.sql`.
+- **What**: SQL dump files created with `pg_dump` from PostgreSQL. These are plain text SQL files that can be restored with `psql` or `pg_restore`.
 
 So backups live **on the same machine** that runs the app, in `./backups/`.
 
 ## How it works
 
 1. A cron job runs at the scheduled times.
-2. The app copies `quotes.db` → `backups/quotes-<timestamp>.db`.
-3. It lists all files in `backups/`, sorts by modification time (newest first).
+2. The app runs `pg_dump` to create a SQL dump → `backups/quotes-<timestamp>.sql`.
+3. It lists all `.sql` files in `backups/`, sorts by modification time (newest first).
 4. If there are more than `MAX_BACKUPS` files, it deletes the oldest until only `MAX_BACKUPS` remain.
 
-Restore = replace `quotes.db` with a chosen backup file, then restart the app.
+**Restore**: Use `psql` to restore a backup:
+```bash
+psql $DATABASE_URL < backups/quotes-<timestamp>.sql
+```
+
+Or use `pg_restore` for custom format dumps (if you modify the backup script).
 
 ---
 

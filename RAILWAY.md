@@ -12,15 +12,21 @@
 
 3. **Railway auto-detects Node.js** and starts deploying
 
-4. **Add Environment Variables**:
+4. **Add PostgreSQL Database**:
+   - In Railway dashboard, click "New" → "Database" → "Add PostgreSQL"
+   - Railway automatically sets `DATABASE_URL` environment variable
+   - Your app will connect automatically
+
+5. **Add Environment Variables**:
    - Go to your service → "Variables" tab
    - Add:
      - `SESSION_SECRET` = (generate: `openssl rand -hex 32` or any random string)
      - `NODE_ENV` = `production`
      - `BACKUP_CRON` = `0 3 * * 0,3` (optional, default is 2×/week)
      - `MAX_BACKUPS` = `8` (optional, default is 8)
+   - **Note**: `DATABASE_URL` is set automatically by Railway when you add PostgreSQL
 
-5. **Custom Domain** (optional):
+6. **Custom Domain** (optional):
    - Go to your service → "Settings" → "Networking"
    - Click "Generate Domain" for a Railway subdomain (e.g. `your-app.up.railway.app`), OR
    - **Add your own domain:**
@@ -35,20 +41,18 @@
      - Wait for Railway to verify (green checkmark) - can take a few minutes to 72 hours
      - SSL certificate is automatically issued once verified
 
-6. **Deploy**: Railway auto-deploys on every push to `main` branch
+7. **Deploy**: Railway auto-deploys on every push to `main` branch
 
 ## Important Notes
 
-- **Database Persistence**: 
-  - **CRITICAL**: SQLite file (`quotes.db`) is stored on Railway's **ephemeral disk** by default.
-  - **This means your database gets WIPED on every redeployment!**
-  - **Solution**: You MUST add a **Volume** for persistent storage:
-    1. Go to your service → "Settings" → "Volumes"
-    2. Click "Add Volume"
-    3. Name it (e.g. `data`)
-    4. Mount it to `/app/data` (or similar)
-    5. Update your app to use the volume path (or symlink `quotes.db` to the volume)
-  - **Alternative**: Use an external database (PostgreSQL, etc.) instead of SQLite
+- **Database**: 
+  - The app uses **PostgreSQL** (Railway's built-in PostgreSQL service).
+  - **Add PostgreSQL database**:
+    1. In Railway dashboard, click "New" → "Database" → "Add PostgreSQL"
+    2. Railway will create a PostgreSQL database and set `DATABASE_URL` automatically
+    3. Your app will connect automatically via the `DATABASE_URL` environment variable
+  - **Database persists** across redeployments (Railway manages it)
+  - **Backups**: SQL dumps are created with `pg_dump` and stored in `backups/` folder (ephemeral). For durable backups, copy them to external storage (S3, etc.)
 - **Backups**: Backups go to `backups/` folder (also ephemeral). For durability:
   - Store backups on the Volume (persistent)
   - Or copy backups to external storage (S3, etc.) via a script
@@ -111,6 +115,8 @@
 - **Build fails**: Check "Deployments" → "View Logs" for errors
 - **Database issues**: If DB seems reset, check if volume is attached and mounted correctly
 - **Environment variables**: Make sure `SESSION_SECRET` is set (required for production)
+- **Database connection**: Make sure PostgreSQL database is added and `DATABASE_URL` is set (Railway does this automatically)
+- **pg_dump not found**: If backups fail, Railway may not have `pg_dump` in PATH. You may need to install PostgreSQL client tools or use Railway's database backup feature instead
 - **Domain not verifying**: 
   - Check DNS records are correct (use `dig` or `nslookup` to verify)
   - Wait up to 72 hours for propagation

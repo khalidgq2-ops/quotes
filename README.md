@@ -59,12 +59,14 @@ npm start
 ## Backups
 
 - **Schedule**: 2× per week (default: 3am Sunday & Wednesday). Env: `BACKUP_CRON`, `MAX_BACKUPS` (default 8).
-- **Where**: Stored on the server under `backups/` as `quotes-<timestamp>.db`. See `BACKUPS.md` for details and risks.
+- **Where**: Stored on the server under `backups/` as `quotes-<timestamp>.sql`. See `BACKUPS.md` for details and risks.
 
 ## Hosting
 
-SQLite; `quotes.db` is created on first run. Set `SESSION_SECRET` and `NODE_ENV=production`. 
+**PostgreSQL** database required. Set `DATABASE_URL` (connection string) and `SESSION_SECRET`, `NODE_ENV=production`.
 
-**Important for Railway/Cloud Hosting**: The database file is stored on ephemeral disk by default, which means it gets **wiped on every redeployment**. You MUST use a **Volume** (persistent storage) to keep your data. See `RAILWAY.md` for details.
+**For Railway**: Add PostgreSQL database service - Railway sets `DATABASE_URL` automatically. See `RAILWAY.md` for details.
+
+**Migration**: The app can be easily migrated to any PostgreSQL host (Heroku, AWS RDS, DigitalOcean, etc.) by exporting/importing SQL dumps. See `BACKUPS.md` for backup/restore instructions.
 
 See `DEPLOY.md` and `SECURITY.md` for more info.
