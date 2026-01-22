@@ -15,6 +15,9 @@ const BACKUP_DIR = path.join(__dirname, 'backups');
 const MAX_BACKUPS = process.env.MAX_BACKUPS ? parseInt(process.env.MAX_BACKUPS, 10) : 8;
 const BACKUP_CRON = process.env.BACKUP_CRON || '0 3 * * 0,3'; // 3am Sunday & Wednesday (2x/week)
 
+// Trust proxy (required for Railway/reverse proxies) - MUST be set before rate limiters
+app.set('trust proxy', true);
+
 // PostgreSQL connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -46,9 +49,6 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-
-// Trust proxy (required for Railway/reverse proxies)
-app.set('trust proxy', true);
 
 // Middleware
 app.use(bodyParser.urlencoded({ extended: true }));
