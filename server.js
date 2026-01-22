@@ -63,15 +63,25 @@ app.use(session({
   name: 'quotes.sid',
 }));
 
-// Test database connection
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.error('Error connecting to PostgreSQL:', err);
-  } else {
+// Test database connection and initialize
+let dbInitialized = false;
+
+async function connectAndInitialize() {
+  try {
+    const result = await pool.query('SELECT NOW()');
     console.log('Connected to PostgreSQL database');
-    initializeDatabase();
+    await initializeDatabase();
+    dbInitialized = true;
+    console.log('Database initialization complete');
+  } catch (err) {
+    console.error('Error connecting to PostgreSQL:', err);
+    console.error('DATABASE_URL:', process.env.DATABASE_URL ? 'Set' : 'NOT SET');
+    // Don't exit - let the server start but log the error
+    // The server will show errors on API calls
   }
-});
+}
+
+connectAndInitialize();
 
 // --- Backups ---
 function runBackup() {
@@ -145,33 +155,17 @@ async function initializeDatabase() {
       FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
     )`);
     
-    // Check if quotes table has group_id column
-    const tableCheck = await pool.query(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'quotes' AND column_name = 'group_id'
+    // Check if quotes table exists
+    const tableExists = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'quotes'
+      )
     `);
     
-    if (tableCheck.rows.length === 0) {
-      // Create quotes table without group_id first, then add it
-      await pool.query(`CREATE TABLE IF NOT EXISTS quotes (
-        id SERIAL PRIMARY KEY,
-        quote_text TEXT NOT NULL,
-        person_id INTEGER NOT NULL,
-        added_by INTEGER NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (person_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE CASCADE
-      )`);
-      
-      // Add group_id column
-      await pool.query(`
-        ALTER TABLE quotes 
-        ADD COLUMN group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE
-      `).catch(e => console.warn('Migration group_id:', e.message));
-    } else {
-      // Table exists with group_id, just ensure it exists
-      await pool.query(`CREATE TABLE IF NOT EXISTS quotes (
+    if (!tableExists.rows[0].exists) {
+      // Table doesn't exist, create it with group_id
+      await pool.query(`CREATE TABLE quotes (
         id SERIAL PRIMARY KEY,
         quote_text TEXT NOT NULL,
         person_id INTEGER NOT NULL,
@@ -182,11 +176,30 @@ async function initializeDatabase() {
         FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
       )`);
+    } else {
+      // Table exists, check if it has group_id column
+      const columnCheck = await pool.query(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'quotes' AND column_name = 'group_id'
+      `);
+      
+      if (columnCheck.rows.length === 0) {
+        // Add group_id column if missing (migration)
+        await pool.query(`
+          ALTER TABLE quotes 
+          ADD COLUMN group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE
+        `).catch(e => console.warn('Migration group_id (may already exist):', e.message));
+      }
     }
     
     await ensureDefaultGroupAndAdmin();
+    console.log('Database tables created/verified');
   } catch (err) {
     console.error('Database initialization error:', err);
+    console.error('Error details:', err.message);
+    console.error('Error code:', err.code);
+    throw err; // Re-throw so caller knows it failed
   }
 }
 
@@ -322,7 +335,8 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: 'Database error' });
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Database error', details: process.env.NODE_ENV === 'development' ? err.message : undefined });
   }
 });
 
@@ -650,6 +664,30 @@ app.get('/leaderboard', requireAuth, (req, res) => res.sendFile(path.join(__dirn
 app.get('/profiles', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'profiles.html')));
 app.get('/admin', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
+// Health check endpoint (before auth middleware)
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ 
+      status: 'ok', 
+      database: 'connected',
+      initialized: dbInitialized,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ 
+      status: 'error', 
+      database: 'disconnected',
+      error: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
+  if (!process.env.DATABASE_URL) {
+    console.warn('WARNING: DATABASE_URL not set! Database will not work.');
+  }
 });
