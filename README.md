@@ -63,4 +63,8 @@ npm start
 
 ## Hosting
 
-SQLite; `quotes.db` is created on first run. Set `SESSION_SECRET` and `NODE_ENV=production`. See `DEPLOY.md` and `SECURITY.md`.
+SQLite; `quotes.db` is created on first run. Set `SESSION_SECRET` and `NODE_ENV=production`. 
+
+**Important for Railway/Cloud Hosting**: The database file is stored on ephemeral disk by default, which means it gets **wiped on every redeployment**. You MUST use a **Volume** (persistent storage) to keep your data. See `RAILWAY.md` for details.
+
+See `DEPLOY.md` and `SECURITY.md` for more info.

@@ -150,22 +150,37 @@ function ensureDefaultGroupAndAdmin() {
           cb();
         });
       };
-      const createAdmin = () => {
-        const hash = bcrypt.hashSync('admin123', 10);
-        db.run(
-          'INSERT INTO users (username, password, display_name, is_admin) VALUES (?,?,?,?)',
-          ['admin', hash, 'Admin', 1],
-          function(er) {
-            if (er) {
-              console.error('Create admin:', er.message);
-              return;
-            }
-            const uid = this.lastID;
-            db.run('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?,?)', [uid, defaultGroupId], () => {
-              console.log('Default admin created: admin / admin123');
-            });
+      const ensureAdmin = () => {
+        // Check if admin exists, create if not
+        db.get('SELECT id FROM users WHERE username = ?', ['admin'], (err, admin) => {
+          if (err) {
+            console.error('Error checking admin:', err.message);
+            return;
           }
-        );
+          if (!admin) {
+            // Admin doesn't exist, create it
+            const hash = bcrypt.hashSync('admin123', 10);
+            db.run(
+              'INSERT INTO users (username, password, display_name, is_admin) VALUES (?,?,?,?)',
+              ['admin', hash, 'Admin', 1],
+              function(er) {
+                if (er) {
+                  console.error('Create admin:', er.message);
+                  return;
+                }
+                const uid = this.lastID;
+                db.run('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?,?)', [uid, defaultGroupId], () => {
+                  console.log('Default admin created: admin / admin123');
+                });
+              }
+            );
+          } else {
+            // Admin exists, ensure they're in Everyone group
+            if (defaultGroupId) {
+              db.run('INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?,?)', [admin.id, defaultGroupId], () => {});
+            }
+          }
+        });
       };
       const migrateQuotes = () => {
         db.run('UPDATE quotes SET group_id = ? WHERE group_id IS NULL', [defaultGroupId], (er) => {
@@ -187,12 +202,12 @@ function ensureDefaultGroupAndAdmin() {
             console.error('Create Everyone group:', er.message);
             return;
           }
-          if (noUsers) createAdmin();
+          ensureAdmin();
           migrateQuotes();
           addAllToEveryone();
         });
       } else {
-        if (noUsers) createAdmin();
+        ensureAdmin();
         migrateQuotes();
         addAllToEveryone();
       }

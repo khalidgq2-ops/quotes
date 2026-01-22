@@ -39,12 +39,22 @@
 
 ## Important Notes
 
-- **Database**: SQLite file (`quotes.db`) is stored on Railway's ephemeral disk. It persists across restarts but **not across redeploys**.
-- **Backups**: Backups go to `backups/` folder (also ephemeral). For durability, consider:
-  - Using Railway's **Volume** (persistent storage) - add in "Settings" → "Volumes"
-  - Or copying backups to external storage (S3, etc.) via a script
+- **Database Persistence**: 
+  - **CRITICAL**: SQLite file (`quotes.db`) is stored on Railway's **ephemeral disk** by default.
+  - **This means your database gets WIPED on every redeployment!**
+  - **Solution**: You MUST add a **Volume** for persistent storage:
+    1. Go to your service → "Settings" → "Volumes"
+    2. Click "Add Volume"
+    3. Name it (e.g. `data`)
+    4. Mount it to `/app/data` (or similar)
+    5. Update your app to use the volume path (or symlink `quotes.db` to the volume)
+  - **Alternative**: Use an external database (PostgreSQL, etc.) instead of SQLite
+- **Backups**: Backups go to `backups/` folder (also ephemeral). For durability:
+  - Store backups on the Volume (persistent)
+  - Or copy backups to external storage (S3, etc.) via a script
 - **24/7 Uptime**: Railway free tier has ~500 hours/month. For true 24/7, consider their paid plan ($5/month).
 - **First Deploy**: Takes 2-3 minutes. Your site will be live at the generated Railway domain.
+- **Admin Account**: Default `admin` / `admin123` is created automatically if it doesn't exist. **Change the password immediately after first login!**
 
 ## After Deployment
 
