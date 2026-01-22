@@ -19,9 +19,17 @@ const BACKUP_CRON = process.env.BACKUP_CRON || '0 3 * * 0,3'; // 3am Sunday & We
 app.set('trust proxy', true);
 
 // PostgreSQL connection pool
+// Railway provides DATABASE_URL automatically when PostgreSQL is linked
+// If not set, try constructing from individual PG* variables
+let databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl && process.env.PGHOST) {
+  // Construct from individual variables (Railway fallback)
+  databaseUrl = `postgresql://${process.env.PGUSER}:${process.env.PGPASSWORD}@${process.env.PGHOST}:${process.env.PGPORT || 5432}/${process.env.PGDATABASE}`;
+}
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && (process.env.DATABASE_URL.includes('sslmode=require') || process.env.DATABASE_URL.includes('railway')) 
+  connectionString: databaseUrl,
+  ssl: databaseUrl && (databaseUrl.includes('sslmode=require') || databaseUrl.includes('railway') || databaseUrl.includes('rlwy.net')) 
     ? { rejectUnauthorized: false } 
     : false,
 });
@@ -72,6 +80,24 @@ app.use(session({
 let dbInitialized = false;
 
 async function connectAndInitialize() {
+  if (!databaseUrl) {
+    console.error('========================================');
+    console.error('ERROR: Database connection string not found!');
+    console.error('========================================');
+    console.error('DATABASE_URL:', process.env.DATABASE_URL ? 'Set' : 'NOT SET');
+    console.error('PGHOST:', process.env.PGHOST ? 'Set' : 'NOT SET');
+    console.error('');
+    console.error('To fix this in Railway:');
+    console.error('1. Go to your Railway project');
+    console.error('2. Click "New" → "Database" → "Add PostgreSQL"');
+    console.error('3. In your app service, go to "Variables" tab');
+    console.error('4. Make sure DATABASE_URL is listed (Railway sets it automatically)');
+    console.error('5. If not, add: DATABASE_URL = ${{Postgres.DATABASE_URL}}');
+    console.error('   (Replace "Postgres" with your PostgreSQL service name)');
+    console.error('========================================');
+    return;
+  }
+  
   try {
     const result = await pool.query('SELECT NOW()');
     console.log('Connected to PostgreSQL database');
@@ -79,8 +105,8 @@ async function connectAndInitialize() {
     dbInitialized = true;
     console.log('Database initialization complete');
   } catch (err) {
-    console.error('Error connecting to PostgreSQL:', err);
-    console.error('DATABASE_URL:', process.env.DATABASE_URL ? 'Set' : 'NOT SET');
+    console.error('Error connecting to PostgreSQL:', err.message);
+    console.error('Connection string:', databaseUrl ? databaseUrl.replace(/:[^:@]+@/, ':****@') : 'none');
     // Don't exit - let the server start but log the error
     // The server will show errors on API calls
   }

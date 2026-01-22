@@ -14,8 +14,16 @@
 
 4. **Add PostgreSQL Database**:
    - In Railway dashboard, click "New" → "Database" → "Add PostgreSQL"
-   - Railway automatically sets `DATABASE_URL` environment variable
-   - Your app will connect automatically
+   - Railway will create a PostgreSQL service
+   - **IMPORTANT**: Make sure the database is linked to your app:
+     - Go to your **app service** (not the database service)
+     - Click "Variables" tab
+     - You should see `DATABASE_URL` automatically listed
+     - If `DATABASE_URL` is NOT there, add it manually:
+       - Click "New Variable"
+       - Name: `DATABASE_URL`
+       - Value: `${{Postgres.DATABASE_URL}}` (replace "Postgres" with your PostgreSQL service name)
+   - Your app will connect automatically once `DATABASE_URL` is set
 
 5. **Add Environment Variables**:
    - Go to your service → "Variables" tab
