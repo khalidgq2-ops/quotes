@@ -43,7 +43,10 @@
                 const data = await response.json();
                 
                 if (response.ok) {
-                    window.location.href = '/';
+                    // Small delay to ensure session is set
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 100);
                 } else {
                     errorDiv.textContent = data.error || 'Login failed';
                 }

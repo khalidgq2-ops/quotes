@@ -6,15 +6,22 @@ async function checkAuth() {
     try {
         const response = await fetch('/api/me');
         if (!response.ok) {
-            window.location.href = '/login';
+            // Already redirected by server, but ensure we're on login page
+            if (window.location.pathname !== '/login') {
+                window.location.href = '/login';
+            }
             return null;
         }
         const user = await response.json();
         currentUser = user;
         updateNavbar(user);
+        // Show content after auth is confirmed
+        document.body.classList.add('authenticated');
         return user;
     } catch (error) {
-        window.location.href = '/login';
+        if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+        }
         return null;
     }
 }
@@ -48,7 +55,20 @@ async function logout() {
     }
 }
 
-// Check auth on page load (except login page)
-if (!window.location.pathname.includes('login') && window.location.pathname !== '/login') {
+// Check auth on page load
+if (window.location.pathname === '/login') {
+    // On login page, check if already authenticated and redirect
+    fetch('/api/me').then(response => {
+        if (response.ok) {
+            window.location.href = '/';
+        } else {
+            // Show login page if not authenticated
+            document.body.classList.add('authenticated');
+        }
+    }).catch(() => {
+        document.body.classList.add('authenticated');
+    });
+} else {
+    // On protected pages, check auth and hide content until confirmed
     checkAuth();
 }

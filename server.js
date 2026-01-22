@@ -203,11 +203,21 @@ function ensureDefaultGroupAndAdmin() {
 // --- Auth helpers ---
 function requireAuth(req, res, next) {
   if (req.session && req.session.userId) return next();
+  // For HTML page requests, redirect to login; for API requests, return JSON
+  const acceptsHtml = req.accepts('html');
+  if (acceptsHtml) {
+    return res.redirect('/login');
+  }
   res.status(401).json({ error: 'Unauthorized' });
 }
 
 function requireAdmin(req, res, next) {
   if (req.session && req.session.userId && req.session.isAdmin) return next();
+  // For HTML page requests, redirect to login; for API requests, return JSON
+  const acceptsHtml = req.accepts('html');
+  if (acceptsHtml) {
+    return res.redirect('/login');
+  }
   res.status(403).json({ error: 'Admin access required' });
 }
 
@@ -578,7 +588,13 @@ app.delete('/api/admin/user-groups', requireAdmin, (req, res) => {
 app.get('/', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
-app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+app.get('/login', (req, res) => {
+  // If already logged in, redirect to home
+  if (req.session && req.session.userId) {
+    return res.redirect('/');
+  }
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
 app.get('/random', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'random.html')));
 app.get('/leaderboard', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'leaderboard.html')));
 app.get('/profiles', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'profiles.html')));
