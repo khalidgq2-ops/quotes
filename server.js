@@ -18,7 +18,9 @@ const BACKUP_CRON = process.env.BACKUP_CRON || '0 3 * * 0,3'; // 3am Sunday & We
 // PostgreSQL connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : false,
+  ssl: process.env.DATABASE_URL && (process.env.DATABASE_URL.includes('sslmode=require') || process.env.DATABASE_URL.includes('railway')) 
+    ? { rejectUnauthorized: false } 
+    : false,
 });
 
 // Ensure backup dir exists
@@ -44,6 +46,9 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// Trust proxy (required for Railway/reverse proxies)
+app.set('trust proxy', true);
 
 // Middleware
 app.use(bodyParser.urlencoded({ extended: true }));
