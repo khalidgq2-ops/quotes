@@ -5,12 +5,14 @@ A fun quotes site for you and your friends to collect and share memorable quotes
 ## Features
 
 - **Customized Login**: Each person has their own login credentials
-- **Add Quotes**: Add quotes and specify which person said them (not just yourself)
+- **Add Quotes**: Add quotes, choose who said them, and which **group** can see them
 - **Sort Quotes**: Sort by date (newest/oldest) or by person
-- **Random Quote**: Get a random quote with a click of a button
-- **Leaderboard**: See who has the most quotes (points)
-- **User Profiles**: View stats for each user
-- **Admin Panel**: Create new accounts (admin only)
+- **Random Quote**: Get a random quote (from your groups) with a click
+- **Leaderboard**: Points from quotes you’re allowed to see; no leaking across groups
+- **User Profiles**: Stats only for users you share a group with (admins see all)
+- **Admin Panel**: Create accounts, create groups, assign users to groups
+- **Backups**: SQLite backups 2×/week (configurable); keep last 8
+- **Security**: Rate limiting, hardened cookies, input validation, group-based access
 
 ## Setup
 
@@ -33,34 +35,32 @@ npm start
 
 **Important**: Change the default admin password after first login through the admin panel!
 
-## Creating New Users
+## Creating New Users & Groups
 
-1. Login as admin
-2. Go to the Admin panel
-3. Fill in the form to create a new user:
-   - Username (for login)
-   - Password
-   - Display Name (shown on quotes and leaderboard)
+1. Log in as admin.
+2. **Admin → Create New User**: username, password (min 8 chars), display name.
+3. **Admin → Groups**: Create groups (e.g. "Friends", "Work").
+4. **Admin → Assign User to Group**: Add users to groups. Users only see quotes (and leaderboard/profile stats) for groups they’re in.
+5. **Admin → Remove User from Group**: Unassign when needed.
 
 ## Usage
 
-- **Login**: Use your username and password
-- **Add Quote**: Click "Add Quote" button, enter the quote text and select who said it
-- **View Quotes**: Browse all quotes on the main page, sort by date or person
-- **Random Quote**: Visit the Random page and click the button to get a random quote
-- **Leaderboard**: See everyone's quote count (points)
-- **Profiles**: View detailed stats for each user
+- **Login**: Your username and password.
+- **Add Quote**: Click "Add Quote", enter text, choose **group** (who can see it) and **who said it**.
+- **View Quotes**: Main page shows quotes from your groups only; sort by date or person.
+- **Random Quote**: Random quote from your groups.
+- **Leaderboard**: Points only from quotes in your groups; no cross-group leakage.
+- **Profiles**: Stats for users you share a group with.
 
 ## Points System
 
-Each quote associated with a person gives them +1 point. Points are displayed on the leaderboard and profiles.
++1 point per quote attributed to a user. Leaderboard and profile counts only include quotes from groups the viewer can access.
+
+## Backups
+
+- **Schedule**: 2× per week (default: 3am Sunday & Wednesday). Env: `BACKUP_CRON`, `MAX_BACKUPS` (default 8).
+- **Where**: Stored on the server under `backups/` as `quotes-<timestamp>.db`. See `BACKUPS.md` for details and risks.
 
 ## Hosting
 
-This app uses SQLite for the database, making it easy to host. The database file (`quotes.db`) will be created automatically on first run.
-
-For production:
-- Change the session secret in `server.js`
-- Use environment variables for sensitive data
-- Consider using a process manager like PM2
-- Set up HTTPS
+SQLite; `quotes.db` is created on first run. Set `SESSION_SECRET` and `NODE_ENV=production`. See `DEPLOY.md` and `SECURITY.md`.

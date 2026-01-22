@@ -1,5 +1,7 @@
 // Authentication and navigation utilities
 
+let currentUser = null;
+
 async function checkAuth() {
     try {
         const response = await fetch('/api/me');
@@ -8,6 +10,7 @@ async function checkAuth() {
             return null;
         }
         const user = await response.json();
+        currentUser = user;
         updateNavbar(user);
         return user;
     } catch (error) {
@@ -15,6 +18,13 @@ async function checkAuth() {
         return null;
     }
 }
+
+function getUser() {
+    return currentUser;
+}
+
+// Expose globally for quotes.js
+window.getUser = getUser;
 
 function updateNavbar(user) {
     const userDisplay = document.getElementById('userDisplay');

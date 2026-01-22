@@ -32,6 +32,22 @@
 
     <script src="auth.js"></script>
     <script>
+        let showGroupUI = true;
+        
+        // Check if we should show group labels
+        checkAuth().then(user => {
+            if (user) {
+                showGroupUI = user.showGroupUI !== false;
+            }
+        });
+        
+        function getUser() {
+            if (typeof window.getUser === 'function') {
+                return window.getUser();
+            }
+            return null;
+        }
+        
         async function getRandomQuote() {
             const quoteDiv = document.getElementById('randomQuote');
             quoteDiv.innerHTML = '<p>Loading...</p>';
@@ -41,11 +57,13 @@
                 const quote = await response.json();
                 
                 if (response.ok) {
+                    // Only show group label if showGroupUI is true
+                    const g = (showGroupUI && quote.group_name) ? ` · ${escapeHtml(quote.group_name)}` : '';
                     quoteDiv.innerHTML = `
                         <div class="quote-text">"${escapeHtml(quote.quote_text)}"</div>
                         <div class="quote-meta">
                             <span class="quote-person">— ${escapeHtml(quote.person_name)}</span>
-                            <span class="quote-date">${formatDate(quote.created_at)}</span>
+                            <span class="quote-date">${formatDate(quote.created_at)}</span>${g ? `<span class="quote-added-by">${g}</span>` : ''}
                         </div>
                     `;
                 } else {

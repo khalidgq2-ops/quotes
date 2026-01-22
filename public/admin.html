@@ -24,7 +24,7 @@
 
     <div class="container">
         <h2>Admin Panel</h2>
-        <p class="subtitle">Create New Accounts</p>
+        <p class="subtitle">Create accounts, manage groups, and assign users to groups.</p>
 
         <div class="admin-card">
             <h3>Create New User</h3>
@@ -35,7 +35,7 @@
                 </div>
                 <div class="form-group">
                     <label for="newPassword">Password:</label>
-                    <input type="password" id="newPassword" name="password" required>
+                    <input type="password" id="newPassword" name="password" required minlength="8">
                 </div>
                 <div class="form-group">
                     <label for="newDisplayName">Display Name:</label>
@@ -47,6 +47,40 @@
         </div>
 
         <div class="admin-card">
+            <h3>Groups</h3>
+            <form id="createGroupForm">
+                <div class="form-group">
+                    <label for="newGroupName">New group name:</label>
+                    <input type="text" id="newGroupName" name="name" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Create Group</button>
+            </form>
+            <div id="createGroupMessage" class="message"></div>
+            <div id="groupsList" class="groups-list"></div>
+        </div>
+
+        <div class="admin-card">
+            <h3>Assign User to Group</h3>
+            <form id="assignGroupForm">
+                <div class="form-group">
+                    <label for="assignUser">User:</label>
+                    <select id="assignUser" required></select>
+                </div>
+                <div class="form-group">
+                    <label for="assignGroup">Group:</label>
+                    <select id="assignGroup" required></select>
+                </div>
+                <button type="submit" class="btn btn-primary">Add to group</button>
+            </form>
+            <div id="assignGroupMessage" class="message"></div>
+        </div>
+
+        <div class="admin-card">
+            <h3>Remove User from Group</h3>
+            <div id="userGroupsList"></div>
+        </div>
+
+        <div class="admin-card">
             <h3>Existing Users</h3>
             <div id="usersList"></div>
         </div>
@@ -54,74 +88,217 @@
 
     <script src="auth.js"></script>
     <script>
+        function esc(s) {
+            const d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
         async function loadUsers() {
             try {
-                const response = await fetch('/api/users');
-                const users = await response.json();
-                
-                const usersDiv = document.getElementById('usersList');
-                
-                if (users.length === 0) {
-                    usersDiv.innerHTML = '<p>No users found.</p>';
+                const r = await fetch('/api/users');
+                const users = await r.json();
+                const div = document.getElementById('usersList');
+                const su = document.getElementById('assignUser');
+                if (su) {
+                    su.innerHTML = '<option value="">Select user...</option>';
+                    (users || []).forEach(u => {
+                        const o = document.createElement('option');
+                        o.value = u.id;
+                        o.textContent = u.display_name + ' (@' + u.username + ')';
+                        su.appendChild(o);
+                    });
+                }
+                if (!div) return;
+                if (!users || !users.length) {
+                    div.innerHTML = '<p>No users found.</p>';
                     return;
                 }
-                
-                let html = '<div class="users-list">';
-                users.forEach(user => {
-                    html += `
-                        <div class="user-item">
-                            <strong>${escapeHtml(user.display_name)}</strong>
-                            <span class="username">(@${escapeHtml(user.username)})</span>
-                        </div>
-                    `;
-                });
-                html += '</div>';
-                usersDiv.innerHTML = html;
-            } catch (error) {
+                div.innerHTML = '<div class="users-list">' + users.map(u =>
+                    `<div class="user-item"><strong>${esc(u.display_name)}</strong> <span class="username">(@${esc(u.username)})</span></div>`
+                ).join('') + '</div>';
+            } catch (e) {
                 document.getElementById('usersList').innerHTML = '<p class="error">Error loading users.</p>';
+            }
+        }
+
+        async function loadGroups() {
+            try {
+                const r = await fetch('/api/admin/groups');
+                const groups = await r.json();
+                const div = document.getElementById('groupsList');
+                const sg = document.getElementById('assignGroup');
+                if (sg) {
+                    sg.innerHTML = '<option value="">Select group...</option>';
+                    (groups || []).forEach(g => {
+                        const o = document.createElement('option');
+                        o.value = g.id;
+                        o.textContent = g.name;
+                        sg.appendChild(o);
+                    });
+                }
+                if (!div) return;
+                if (!groups || !groups.length) {
+                    div.innerHTML = '<p>No groups yet.</p>';
+                    return;
+                }
+                div.innerHTML = '<p><strong>Existing:</strong> ' + groups.map(g => esc(g.name)).join(', ') + '</p>';
+            } catch (e) {
+                const d = document.getElementById('groupsList');
+                if (d) d.innerHTML = '<p class="error">Error loading groups.</p>';
+            }
+        }
+
+        async function loadUserGroups() {
+            try {
+                const r = await fetch('/api/admin/user-groups');
+                const rows = await r.json();
+                const div = document.getElementById('userGroupsList');
+                if (!rows || !rows.length) {
+                    div.innerHTML = '<p>No user–group assignments.</p>';
+                    return;
+                }
+                div.innerHTML = '<div class="user-groups-list">' + rows.map(ug =>
+                    `<div class="user-group-item">
+                        <span>${esc(ug.display_name)} → ${esc(ug.group_name)}</span>
+                        <button type="button" class="btn btn-small btn-secondary" data-user-id="${ug.user_id}" data-group-id="${ug.group_id}">Remove</button>
+                    </div>`
+                ).join('') + '</div>';
+                div.querySelectorAll('button[data-user-id]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const uid = btn.getAttribute('data-user-id');
+                        const gid = btn.getAttribute('data-group-id');
+                        try {
+                            const resp = await fetch('/api/admin/user-groups', {
+                                method: 'DELETE',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: parseInt(uid, 10), groupId: parseInt(gid, 10) })
+                            });
+                            if (resp.ok) loadUserGroups();
+                            else {
+                                const d = await resp.json();
+                                alert(d.error || 'Failed to remove');
+                            }
+                        } catch (e) {
+                            alert('Request failed');
+                        }
+                    });
+                });
+            } catch (e) {
+                document.getElementById('userGroupsList').innerHTML = '<p class="error">Error loading assignments.</p>';
             }
         }
 
         document.getElementById('createUserForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const messageDiv = document.getElementById('createUserMessage');
-            messageDiv.textContent = '';
-            
-            const username = document.getElementById('newUsername').value;
+            const msg = document.getElementById('createUserMessage');
+            msg.textContent = '';
+            msg.className = 'message';
+            const username = document.getElementById('newUsername').value.trim();
             const password = document.getElementById('newPassword').value;
-            const displayName = document.getElementById('newDisplayName').value;
-            
+            const displayName = document.getElementById('newDisplayName').value.trim();
+            if (!username || !password || !displayName) {
+                msg.textContent = 'Fill all fields.';
+                msg.className = 'message error';
+                return;
+            }
+            if (password.length < 8) {
+                msg.textContent = 'Password must be at least 8 characters.';
+                msg.className = 'message error';
+                return;
+            }
             try {
-                const response = await fetch('/api/users', {
+                const r = await fetch('/api/users', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password, displayName })
                 });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    messageDiv.textContent = 'User created successfully!';
-                    messageDiv.className = 'message success';
+                const data = await r.json();
+                if (r.ok) {
+                    msg.textContent = 'User created.';
+                    msg.className = 'message success';
                     document.getElementById('createUserForm').reset();
                     loadUsers();
+                    loadUserGroups();
                 } else {
-                    messageDiv.textContent = data.error || 'Error creating user';
-                    messageDiv.className = 'message error';
+                    msg.textContent = data.error || 'Error creating user.';
+                    msg.className = 'message error';
                 }
-            } catch (error) {
-                messageDiv.textContent = 'Network error. Please try again.';
-                messageDiv.className = 'message error';
+            } catch (err) {
+                msg.textContent = 'Network error.';
+                msg.className = 'message error';
             }
         });
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
+        document.getElementById('createGroupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const msg = document.getElementById('createGroupMessage');
+            msg.textContent = '';
+            msg.className = 'message';
+            const name = document.getElementById('newGroupName').value.trim();
+            if (!name) {
+                msg.textContent = 'Enter a group name.';
+                msg.className = 'message error';
+                return;
+            }
+            try {
+                const r = await fetch('/api/admin/groups', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                const data = await r.json();
+                if (r.ok) {
+                    msg.textContent = 'Group created.';
+                    msg.className = 'message success';
+                    document.getElementById('createGroupForm').reset();
+                    loadGroups();
+                } else {
+                    msg.textContent = data.error || 'Error creating group.';
+                    msg.className = 'message error';
+                }
+            } catch (err) {
+                msg.textContent = 'Network error.';
+                msg.className = 'message error';
+            }
+        });
+
+        document.getElementById('assignGroupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const msg = document.getElementById('assignGroupMessage');
+            msg.textContent = '';
+            msg.className = 'message';
+            const userId = parseInt(document.getElementById('assignUser').value, 10);
+            const groupId = parseInt(document.getElementById('assignGroup').value, 10);
+            if (!userId || !groupId) {
+                msg.textContent = 'Select user and group.';
+                msg.className = 'message error';
+                return;
+            }
+            try {
+                const r = await fetch('/api/admin/user-groups', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, groupId })
+                });
+                const data = await r.json();
+                if (r.ok) {
+                    msg.textContent = 'User added to group.';
+                    msg.className = 'message success';
+                    loadUserGroups();
+                } else {
+                    msg.textContent = data.error || 'Error (maybe already in group).';
+                    msg.className = 'message error';
+                }
+            } catch (err) {
+                msg.textContent = 'Network error.';
+                msg.className = 'message error';
+            }
+        });
 
         loadUsers();
+        loadGroups();
+        loadUserGroups();
     </script>
 </body>
 </html>
