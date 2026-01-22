@@ -16,7 +16,8 @@ const MAX_BACKUPS = process.env.MAX_BACKUPS ? parseInt(process.env.MAX_BACKUPS, 
 const BACKUP_CRON = process.env.BACKUP_CRON || '0 3 * * 0,3'; // 3am Sunday & Wednesday (2x/week)
 
 // Trust proxy (required for Railway/reverse proxies) - MUST be set before rate limiters
-app.set('trust proxy', true);
+// Set to 1 to trust only the first proxy (Railway's reverse proxy)
+app.set('trust proxy', 1);
 
 // PostgreSQL connection pool
 // Railway provides DATABASE_URL automatically when PostgreSQL is linked
